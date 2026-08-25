@@ -6,10 +6,14 @@ import {
   normalizeDataset,
   rulesFor,
   auctionDatasetPath,
+  loadInitialProfile,
+  rememberProfile,
+  saveProfile,
 } from "./profile-client.js";
 
 const profile = {
   profile_id: "league-a",
+  configuration_hash: "current-hash",
   participants: { team_names: ["A", "B"], user_team: "A" },
   credits: { starting: 600 }, roster_slots: { P: 2, D: 7, C: 7, A: 5 },
   formations: { allowed: ["3-4-3"] }, bench_switch: { max_substitutions: 2, mode: "Basic" },
@@ -20,9 +24,15 @@ const profile = {
 };
 
 test("normalizes schema 1.0 metadata and rejects another profile", () => {
-  const data = normalizeDataset({ schema_version: "1.0", meta: { profile: { profile_id: "league-a" } }, players: [] }, profile);
+  const data = normalizeDataset({ schema_version: "1.0", meta: { profile: { profile_id: "league-a", profile_hash: "current-hash" } }, players: [] }, profile);
   assert.equal(data.legacy, false);
+  assert.equal(data.freshness, "current");
   assert.throws(() => normalizeDataset({ schema_version: "1.0", meta: { profile: { profile_id: "other" } }, players: [] }, profile), (error) => error instanceof ProfileClientError && error.code === "profile_mismatch");
+});
+
+test("marks a dataset generated from an older profile as stale", () => {
+  const data = normalizeDataset({ schema_version: "1.0", meta: { profile: { profile_id: "league-a", profile_hash: "old-hash" } }, players: [] }, profile);
+  assert.equal(data.freshness, "stale");
 });
 
 test("accepts legacy payloads and resolves profile rules for league engines", () => {
@@ -43,7 +53,46 @@ test("normalizes extra formation strings for browser engines", () => {
 });
 
 test("loads and normalizes a dataset URL through an injected fetch", async () => {
-  const data = await loadDatasetUrl("/dataset.json", { profile, fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ schema_version: "1.0", meta: { profile: { profile_id: "league-a" } }, players: [] }) }) });
+  const data = await loadDatasetUrl("/dataset.json", { profile, fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ schema_version: "1.0", meta: { profile: { profile_id: "league-a", profile_hash: "current-hash" } }, players: [] }) }) });
   assert.equal(data.schema_version, "1.0");
   assert.equal(auctionDatasetPath({ profile_id: "league-a", season: { season: "2026/27" } }), "league-a/2026-27/auction_data.json");
+});
+
+test("saves a profile through the local API", async () => {
+  let request;
+  const saved = await saveProfile(profile, {
+    apiBase: "http://127.0.0.1:8000",
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, status: 200, json: async () => profile };
+    },
+  });
+  assert.equal(request.url, "http://127.0.0.1:8000/api/profiles/league-a");
+  assert.equal(request.options.method, "PUT");
+  assert.deepEqual(JSON.parse(request.options.body), profile);
+  assert.equal(saved.configuration_hash, "current-hash");
+});
+
+test("remembers and reloads the last successfully used profile", async () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+  rememberProfile({ profile_id: "saved-profile" }, { storage });
+  let requestedUrl;
+  const loaded = await loadInitialProfile({
+    storage,
+    apiBase: "http://127.0.0.1:8000",
+    fetchImpl: async (url) => {
+      requestedUrl = url;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ profile_id: "saved-profile" }),
+      };
+    },
+  });
+  assert.equal(requestedUrl, "http://127.0.0.1:8000/api/profiles/saved-profile");
+  assert.equal(loaded.profile_id, "saved-profile");
 });

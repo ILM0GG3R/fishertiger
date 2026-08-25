@@ -2,6 +2,7 @@ import { normalizeRules } from "./league-rules.js";
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const object = (value) => (isObject(value) ? value : {});
+const ACTIVE_PROFILE_KEY = "fantacalcio.active-profile-id";
 
 export class ProfileClientError extends Error {
   constructor(code, message, { status, details, cause } = {}) {
@@ -73,6 +74,33 @@ export const listProfiles = async (options = {}) => {
 export const loadProfile = async (id, options = {}) =>
   requestJson(apiUrl(`/api/profiles/${encodeURIComponent(profileId(id))}`, options.apiBase), options);
 
+export const rememberProfile = (profile, { storage = globalThis.localStorage } = {}) => {
+  const value = object(profile);
+  try {
+    storage?.setItem(ACTIVE_PROFILE_KEY, profileId(value.profile_id));
+  } catch {
+    // Saving still works when browser storage is unavailable.
+  }
+  return value;
+};
+
+export const loadInitialProfile = async ({ storage = globalThis.localStorage, ...options } = {}) => {
+  let savedId;
+  try {
+    savedId = storage?.getItem(ACTIVE_PROFILE_KEY);
+  } catch {
+    // Fall back to the public default profile.
+  }
+  if (savedId) {
+    try {
+      return await loadProfile(savedId, options);
+    } catch {
+      // A deleted or invalid remembered profile must not prevent startup.
+    }
+  }
+  return requestJson(apiUrl("/api/default-profile", options.apiBase), options);
+};
+
 export const saveProfile = async (profile, options = {}) => {
   const value = object(profile);
   const id = profileId(value.profile_id);
@@ -99,6 +127,14 @@ export const generateProfile = async (profileOrId, options = {}) => {
 };
 
 const datasetProfileId = (meta) => object(meta.profile).profile_id || meta.profile_id;
+const datasetProfileHash = (meta) => object(meta.profile).profile_hash || meta.profile_hash;
+
+const datasetFreshness = (payload, profile) => {
+  const expected = object(profile).configuration_hash;
+  const actual = isObject(payload.meta) ? datasetProfileHash(payload.meta) : undefined;
+  if (!expected || !actual) return "unknown";
+  return expected === actual ? "current" : "stale";
+};
 
 /** Validate generated schema 1.0 data, while accepting pre-schema public exports. */
 export const validateDataset = (payload, profile) => {
@@ -133,6 +169,7 @@ export const normalizeDataset = (payload, profile) => {
     league_rules: object(payload.league_rules || payload.rules),
     calendario_lega: payload.calendario_lega || payload.calendar,
     legacy,
+    freshness: datasetFreshness(payload, profile),
   };
 };
 

@@ -59,7 +59,11 @@ class LocalApiServerTests(unittest.TestCase):
         body = json.dumps(self.profile).encode("utf-8")
         response, payload = self.request("PUT", "/api/profiles/my-team", body, {"Content-Type": "application/json"})
         self.assertEqual(response.status, 200)
-        self.assertEqual(payload, self.profile)
+        expected = {
+            **self.profile,
+            "configuration_hash": LeagueProfile.from_dict(self.profile).configuration_hash,
+        }
+        self.assertEqual(payload, expected)
 
         response, payload = self.request("GET", "/api/profiles")
         self.assertEqual(response.status, 200)
@@ -67,7 +71,7 @@ class LocalApiServerTests(unittest.TestCase):
 
         response, payload = self.request("GET", "/api/profiles/my-team")
         self.assertEqual(response.status, 200)
-        self.assertEqual(payload, self.profile)
+        self.assertEqual(payload, expected)
 
     def test_rejects_unsafe_names_and_invalid_json_boundaries(self):
         response, payload = self.request("PUT", "/api/profiles/%2E%2E", b'{}', {"Content-Type": "application/json"})
@@ -107,6 +111,10 @@ class LocalApiServerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["profile_id"], "my-team")
         self.assertEqual(payload["profile_hash"], LeagueProfile.from_dict(self.profile).configuration_hash)
+        self.assertEqual(payload["profile"], {
+            **self.profile,
+            "configuration_hash": payload["profile_hash"],
+        })
         self.assertEqual(payload["dataset_path"], "my-team/2026-27/auction_data.json")
         self.assertEqual(payload["dataset_manifest"]["datasets"][1]["path"], "my-team/2026-27/auction_data.json")
         self.assertEqual(self.calls[0].profile_id, "my-team")

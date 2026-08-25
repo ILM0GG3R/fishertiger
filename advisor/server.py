@@ -22,6 +22,7 @@ from .generate import (
     dataset_manifest,
     generate_dataset,
     load_profile,
+    profile_payload,
     resolve_profile,
 )
 
@@ -177,7 +178,7 @@ class LocalApiHandler(BaseHTTPRequestHandler):
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "default_profile_unavailable", "The default profile is unavailable.")
             return
-        self._send_json(HTTPStatus.OK, profile.to_dict())
+        self._send_json(HTTPStatus.OK, profile_payload(profile))
 
     def _profile_index(self) -> None:
         directory = self.server.profiles_dir
@@ -206,7 +207,7 @@ class LocalApiHandler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "storage_error", "The stored profile is invalid or unreadable.")
             return
         try:
-            self._send_json(HTTPStatus.OK, self._derive_calendar_participants(profile).to_dict())
+            self._send_json(HTTPStatus.OK, profile_payload(self._derive_calendar_participants(profile)))
         except (OSError, ValueError) as error:
             self._error(HTTPStatus.UNPROCESSABLE_ENTITY, "invalid_source_data", str(error))
 
@@ -233,7 +234,7 @@ class LocalApiHandler(BaseHTTPRequestHandler):
         except (OSError, TypeError, ValueError):
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "storage_error", "The profile could not be saved.")
             return
-        self._send_json(HTTPStatus.OK, profile.to_dict())
+        self._send_json(HTTPStatus.OK, profile_payload(profile))
 
     def _put_upload(self, relative_path: str) -> None:
         parts = relative_path.split("/")

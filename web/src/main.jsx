@@ -18,8 +18,12 @@ import {
 import {
   apiUrl,
   auctionDatasetPath,
+  generateProfile,
+  loadInitialProfile,
   loadDatasetUrl,
+  rememberProfile,
   rulesFor,
+  saveProfile,
   seasonSimulationPath,
 } from "./profile-client.js";
 import { createRoleValuation, sourceFvm } from "./player-valuation.js";
@@ -63,8 +67,7 @@ function App() {
   ]);
   const [historyIndex, setHistoryIndex] = useState(0);
   useEffect(() => {
-    fetch(apiUrl("/api/default-profile", apiBase))
-      .then((response) => (response.ok ? response.json() : null))
+    loadInitialProfile({ apiBase })
       .then(setProfile)
       .catch(() => setProfile(null));
   }, [apiBase]);
@@ -125,28 +128,26 @@ function App() {
   const activeProfileId =
     profile?.profile_id || data?.meta?.profile?.profile_id || "default";
   const updateProfile = async (nextProfile, generate = false) => {
-    setProfile(nextProfile);
     setProfileError("");
-    if (!generate) return;
     try {
-      const response = await fetch(`${apiBase}/api/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profile: nextProfile }),
-      });
-      const payload = await response.json();
-      if (!response.ok || !payload.dataset_path)
-        throw new Error(
-          payload.error?.message || "Generazione non completata.",
-        );
+      if (!generate) {
+        const savedProfile = await saveProfile(nextProfile, { apiBase });
+        setProfile(rememberProfile(savedProfile));
+        return savedProfile;
+      }
+      const payload = await generateProfile(nextProfile, { apiBase });
+      if (!payload.dataset_path) throw new Error("Generazione non completata.");
+      const effectiveProfile = rememberProfile(payload.profile || nextProfile);
       setData(
         await loadDatasetUrl(
           apiUrl(`/api/datasets/${payload.dataset_path}`, apiBase),
-          { profile: nextProfile },
+          { profile: effectiveProfile },
         ),
       );
+      setProfile(effectiveProfile);
       setSeason(null);
       navigate("overview");
+      return effectiveProfile;
     } catch (error) {
       setProfileError(
         error instanceof Error
@@ -259,12 +260,18 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="data-status">
+        <div className={`data-status ${data.freshness}`}>
           <i />
-          Dati aggiornati
+          {data.freshness === "current"
+            ? "Dati aggiornati"
+            : data.freshness === "stale"
+              ? "Dati da rigenerare"
+              : "Freschezza non verificabile"}
           <br />
           <small>
-            {generationStatus || data.meta?.generato_il?.slice(0, 10) || "profilo locale"}
+            {data.freshness === "stale"
+              ? "Il profilo è cambiato"
+              : generationStatus || data.meta?.generato_il?.slice(0, 10) || "profilo locale"}
           </small>
           <button
             className="regenerate-data"

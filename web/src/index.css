@@ -58,6 +58,14 @@
     opacity: .65;
   }
 
+  .data-status.stale i {
+    background: #f0b65f;
+  }
+
+  .data-status.unknown i {
+    background: #9ba79e;
+  }
+
   .simulation-run {
     display: flex;
     align-items: center;
