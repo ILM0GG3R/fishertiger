@@ -563,6 +563,10 @@
   background: var(--lime);
   color: var(--lime-ink);
   font-weight: 900;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    background 160ms ease;
 }
 .ls-actions .ls-generate {
   border-color: #55715e;
@@ -578,6 +582,71 @@
 .ls-actions button:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+.ls-actions .ls-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-width: 190px;
+  border-color: #d9ffad;
+  background: linear-gradient(180deg, #c9f58f, var(--lime));
+  box-shadow:
+    0 3px 0 #597739,
+    0 8px 20px rgba(0, 0, 0, 0.28);
+  letter-spacing: 0.01em;
+}
+.ls-actions .ls-save:hover:not(:disabled) {
+  box-shadow:
+    0 4px 0 #597739,
+    0 11px 24px rgba(0, 0, 0, 0.32);
+}
+.ls-actions .ls-save:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow:
+    0 1px 0 #597739,
+    0 3px 8px rgba(0, 0, 0, 0.24);
+}
+.ls-actions .ls-save.is-busy:disabled {
+  border-color: #93bd65;
+  background: #405b32;
+  color: #f3ffe6;
+  cursor: wait;
+}
+.ls-actions .ls-save.is-saved {
+  border-color: #70d99b;
+  background: #286541;
+  color: #f2fff6;
+  box-shadow:
+    0 3px 0 #153a26,
+    0 8px 20px rgba(0, 0, 0, 0.25);
+}
+.ls-save-icon {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+}
+.ls-save.is-busy .ls-save-icon {
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ls-save-spin 700ms linear infinite;
+}
+@keyframes ls-save-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ls-actions button {
+    transition: none;
+  }
+  .ls-save.is-busy .ls-save-icon {
+    animation: none;
+  }
 }
 .ls-actions button:focus-visible,
 .ls-text-button:focus-visible,

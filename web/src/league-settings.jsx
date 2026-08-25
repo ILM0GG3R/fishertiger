@@ -381,7 +381,8 @@ export function LeagueSettings({
   );
   const [errors, setErrors] = useState([]);
   const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState(null);
+  const busy = busyAction !== null;
   const [sourceStatuses, setSourceStatuses] = useState({});
   const errorRef = useRef(null);
   const endpoint = (path) => `${apiBase.replace(/\/$/, "")}${path}`;
@@ -456,7 +457,8 @@ export function LeagueSettings({
       });
     return () => controller.abort();
   }, [apiBase, sourceSignature]);
-  const update = (path, value) =>
+  const update = (path, value) => {
+    setStatus("");
     setProfile((current) => {
       const next = clone(current);
       let target = next;
@@ -466,11 +468,14 @@ export function LeagueSettings({
       target[path.at(-1)] = value;
       return next;
     });
-  const updateSeasonRange = (field, value) =>
+  };
+  const updateSeasonRange = (field, value) => {
+    setStatus("");
     setProfile((current) => ({
       ...current,
       season: synchronizeFantasyRange(current.season, field, value),
     }));
+  };
   const input = (label, path, options = {}) => {
     const value = path.reduce((item, key) => item[key], profile);
     return (
@@ -536,7 +541,7 @@ export function LeagueSettings({
       requestAnimationFrame(() => errorRef.current?.focus());
       return;
     }
-    setBusy(true);
+    setBusyAction(generate ? "generate" : "save");
     setStatus("");
     try {
       const callback = generate ? onGenerate : onSave;
@@ -569,7 +574,7 @@ export function LeagueSettings({
         `Impossibile ${generate ? "generare" : "salvare"}: ${error.message}.`,
       );
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
   const uploadSource = async (group, index, file) => {
@@ -1324,8 +1329,22 @@ export function LeagueSettings({
             ? "Le fonti necessarie sono presenti. Il calendario della lega è facoltativo."
             : "Carica o ripristina le fonti necessarie prima di generare i dati."}
         </p>
-        <button type="submit" disabled={busy}>
-          {busy ? "Salvataggio..." : "Salva profilo"}
+        <button
+          type="submit"
+          className={`ls-save${busyAction === "save" ? " is-busy" : status === "Profilo salvato correttamente." ? " is-saved" : ""}`}
+          disabled={busy}
+          aria-busy={busyAction === "save"}
+        >
+          {(busyAction === "save" || status === "Profilo salvato correttamente.") && (
+            <span className="ls-save-icon" aria-hidden="true">
+              {busyAction === "save" ? "" : "✓"}
+            </span>
+          )}
+          {busyAction === "save"
+            ? "Salvataggio in corso..."
+            : status === "Profilo salvato correttamente."
+              ? "Profilo salvato"
+              : "Salva profilo"}
         </button>
         <button
           type="button"
