@@ -1,0 +1,32 @@
+name: Check upstream updates
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: git fetch https://github.com/Zannael/fishertiger.git main:refs/remotes/upstream/main
+
+      - name: Check for new commits
+        shell: bash
+        run: |
+          new_commits=$(git rev-list --count HEAD..upstream/main)
+          if [ "$new_commits" -gt 0 ]; then
+            echo "::error title=Aggiornamenti upstream disponibili::$new_commits nuovi commit disponibili da Zannael/fishertiger"
+            git log --oneline HEAD..upstream/main
+            exit 1
+          fi
+          echo "Il fork è aggiornato."
