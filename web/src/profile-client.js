@@ -2,7 +2,6 @@ import { normalizeRules } from "./league-rules.js";
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const object = (value) => (isObject(value) ? value : {});
-const ACTIVE_PROFILE_KEY = "fantacalcio.active-profile-id";
 
 export class ProfileClientError extends Error {
   constructor(code, message, { status, details, cause } = {}) {
@@ -34,10 +33,24 @@ export const auctionDatasetPath = (profile) => {
 export const seasonSimulationPath = (profile) =>
   auctionDatasetPath(profile).replace("auction_data.json", "season_simulation.json");
 
+export const isValidProfileId = (value) =>
+  typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value);
+
 const profileId = (value) => {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value))
-    fail("invalid_profile_id", "Profile IDs may contain only letters, numbers, underscores, and hyphens.");
+  if (!isValidProfileId(value))
+    fail("invalid_profile_id", "Profile IDs must start with a letter or number and contain at most 64 letters, numbers, underscores, or hyphens.");
   return value;
+};
+
+export const datasetPathError = (profile) => {
+  try {
+    auctionDatasetPath(profile);
+    return "";
+  } catch (error) {
+    if (error instanceof ProfileClientError && error.code === "invalid_profile_id")
+      return "ID profilo non valido: usa al massimo 64 caratteri, iniziando con una lettera o un numero; sono ammessi anche underscore e trattini.";
+    return "Profilo non valido: ID e stagione sono obbligatori.";
+  }
 };
 
 async function requestJson(url, { fetchImpl = globalThis.fetch, ...options } = {}) {
@@ -74,33 +87,6 @@ export const listProfiles = async (options = {}) => {
 export const loadProfile = async (id, options = {}) =>
   requestJson(apiUrl(`/api/profiles/${encodeURIComponent(profileId(id))}`, options.apiBase), options);
 
-export const rememberProfile = (profile, { storage = globalThis.localStorage } = {}) => {
-  const value = object(profile);
-  try {
-    storage?.setItem(ACTIVE_PROFILE_KEY, profileId(value.profile_id));
-  } catch {
-    // Saving still works when browser storage is unavailable.
-  }
-  return value;
-};
-
-export const loadInitialProfile = async ({ storage = globalThis.localStorage, ...options } = {}) => {
-  let savedId;
-  try {
-    savedId = storage?.getItem(ACTIVE_PROFILE_KEY);
-  } catch {
-    // Fall back to the public default profile.
-  }
-  if (savedId) {
-    try {
-      return await loadProfile(savedId, options);
-    } catch {
-      // A deleted or invalid remembered profile must not prevent startup.
-    }
-  }
-  return requestJson(apiUrl("/api/default-profile", options.apiBase), options);
-};
-
 export const saveProfile = async (profile, options = {}) => {
   const value = object(profile);
   const id = profileId(value.profile_id);
@@ -111,6 +97,28 @@ export const saveProfile = async (profile, options = {}) => {
     body: JSON.stringify(value),
   });
 };
+
+/** Parse a profile file chosen by the user. Rejects anything the API would refuse
+ *  anyway, so the failure is reported before a request is made. */
+export const parseProfileJson = (text) => {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (cause) {
+    fail("invalid_profile_file", "Il file non contiene JSON valido.", { cause });
+  }
+  if (!isObject(value)) fail("invalid_profile_file", "Il file deve contenere un oggetto JSON.");
+  if (typeof value.profile_id !== "string" || !value.profile_id.trim())
+    fail("invalid_profile_file", "Il file non sembra un profilo: manca profile_id.");
+  profileId(value.profile_id);
+  return value;
+};
+
+export const deleteProfile = async (id, options = {}) =>
+  requestJson(apiUrl(`/api/profiles/${encodeURIComponent(profileId(id))}`, options.apiBase), {
+    ...options,
+    method: "DELETE",
+  });
 
 export const generateProfile = async (profileOrId, options = {}) => {
   const request = typeof profileOrId === "string"
@@ -127,14 +135,6 @@ export const generateProfile = async (profileOrId, options = {}) => {
 };
 
 const datasetProfileId = (meta) => object(meta.profile).profile_id || meta.profile_id;
-const datasetProfileHash = (meta) => object(meta.profile).profile_hash || meta.profile_hash;
-
-const datasetFreshness = (payload, profile) => {
-  const expected = object(profile).configuration_hash;
-  const actual = isObject(payload.meta) ? datasetProfileHash(payload.meta) : undefined;
-  if (!expected || !actual) return "unknown";
-  return expected === actual ? "current" : "stale";
-};
 
 /** Validate generated schema 1.0 data, while accepting pre-schema public exports. */
 export const validateDataset = (payload, profile) => {
@@ -169,7 +169,6 @@ export const normalizeDataset = (payload, profile) => {
     league_rules: object(payload.league_rules || payload.rules),
     calendario_lega: payload.calendario_lega || payload.calendar,
     legacy,
-    freshness: datasetFreshness(payload, profile),
   };
 };
 
@@ -198,6 +197,13 @@ export const rulesFor = (profile, data = {}) => {
   const standings = object(source.standings);
   const auction = object(source.auction);
   const incomplete = object(source.incomplete_lineup);
+  const season = object(source.season);
+  const calendarMatchdays = Array.isArray(dataset.calendario_lega?.matchdays)
+    ? dataset.calendario_lega.matchdays.map((day) => Number(day.serie_a_matchday) - 1).filter((day) => Number.isInteger(day) && day >= 0)
+    : [];
+  const currentLeagueMatchdays = calendarMatchdays.length
+    ? calendarMatchdays
+    : Array.from({ length: Math.max(0, Number(season.fantasy_end_matchday) - Number(season.fantasy_start_matchday) + 1) }, (_, index) => Number(season.fantasy_start_matchday) - 1 + index);
   const profileRules = {
     participants: pick(participants.team_names?.length, fallback.participants),
     teamNames: pick(participants.team_names, fallback.teamNames || fallback.team_names),
@@ -224,15 +230,19 @@ export const rulesFor = (profile, data = {}) => {
       roleBudgetPercentages: pick(
         auction.role_budget_percentages,
         object(fallback.auction).roleBudgetPercentages ||
-          object(fallback.auction).role_budget_percentages,
+        object(fallback.auction).role_budget_percentages,
       ),
       roleBudgetFlexibilityPercent: pick(
         auction.role_budget_flexibility_percent,
         object(fallback.auction).roleBudgetFlexibilityPercent ??
-          object(fallback.auction).role_budget_flexibility_percent,
+        object(fallback.auction).role_budget_flexibility_percent,
       ),
     },
     calendar: dataset.calendario_lega || dataset.calendar || fallback.calendario_lega || fallback.calendar,
+    horizons: {
+      historical: { matchdays: pick(season.serie_a_matchdays, object(fallback.horizons).historical?.matchdays ?? 38), label: `storico ${pick(season.serie_a_matchdays, object(fallback.horizons).historical?.matchdays ?? 38)}` },
+      currentLeague: { matchdayIndices: currentLeagueMatchdays, label: `lega corrente ${currentLeagueMatchdays.length}` },
+    },
   };
   return normalizeRules(profileRules);
 };

@@ -74,15 +74,10 @@ def generate_dataset(
     return {
         "profile_id": profile.profile_id,
         "profile_hash": profile.configuration_hash,
-        "profile": profile_payload(profile),
+        "profile": profile.to_dict() if hasattr(profile, "to_dict") else None,
         "dataset_path": path,
         "dataset_manifest": manifest,
     }
-
-
-def profile_payload(profile: Any) -> dict[str, Any]:
-    """Return the public profile together with its canonical configuration hash."""
-    return {**profile.to_dict(), "configuration_hash": profile.configuration_hash}
 
 
 def auction_dataset_path(profile: Any) -> str:

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { synchronizeFantasyRange } from "./league-settings-range.js";
 import { participantsFromCalendar } from "./league-calendar-teams.js";
+import { isValidProfileId } from "./profile-client.js";
 import {
   exactTiePolicies,
   incompleteLineupPolicies,
@@ -9,6 +10,7 @@ import {
   supportedValues,
   tieBreakers,
 } from "./league-settings-policies.js";
+import { profileChangePolicy } from "./profile-change-policy.js";
 
 const roles = ["P", "D", "C", "A"];
 const roleBudgetLabels = {
@@ -159,11 +161,7 @@ const mergeProfile = (profile = {}, leagueCalendar) => ({
   credits: { ...defaults.credits, ...profile.credits },
   roster_slots: { ...defaults.roster_slots, ...profile.roster_slots },
   formations: { ...defaults.formations, ...profile.formations },
-  bench_switch: {
-    ...clone(defaults.bench_switch),
-    ...profile.bench_switch,
-    bench_roles: [...(profile.bench_switch?.bench_roles ?? defaults.bench_switch.bench_roles)],
-  },
+  bench_switch: { ...defaults.bench_switch, ...profile.bench_switch },
   scoring: { ...defaults.scoring, ...profile.scoring },
   virtual_goals: { ...defaults.virtual_goals, ...profile.virtual_goals },
   defense_modifier: {
@@ -205,6 +203,10 @@ function validate(profile) {
       );
   };
   required(profile.profile_id, "ID profilo");
+  if (String(profile.profile_id ?? "").trim() && !isValidProfileId(profile.profile_id))
+    errors.push(
+      "L'ID profilo deve iniziare con una lettera o un numero e contenere al massimo 64 caratteri tra lettere, numeri, underscore e trattini.",
+    );
   required(profile.name, "Nome del profilo");
   required(profile.season.season, "Stagione");
   positive(profile.season.serie_a_matchdays, "Giornate di Serie A");
@@ -383,8 +385,16 @@ export function LeagueSettings({
   const [status, setStatus] = useState("");
   const [busyAction, setBusyAction] = useState(null);
   const busy = busyAction !== null;
+  const profileSaved =
+    !busy &&
+    (status === "Profilo aggiornato." ||
+      status.startsWith("Profilo salvato"));
   const [sourceStatuses, setSourceStatuses] = useState({});
+  const changePolicy = profileChangePolicy(mergeProfile(initialProfile, leagueCalendar), profile);
   const errorRef = useRef(null);
+  const saveRequest = useRef(0);
+  const submittedProfileId = useRef(null);
+  const syncedInitialProfile = useRef(initialProfile);
   const endpoint = (path) => `${apiBase.replace(/\/$/, "")}${path}`;
   const sourceSignature = JSON.stringify(
     ["current_sources", "history_sources"].flatMap((group) =>
@@ -398,8 +408,28 @@ export function LeagueSettings({
     ),
   );
   useEffect(() => {
+    const ownSave =
+      Boolean(submittedProfileId.current) &&
+      submittedProfileId.current === initialProfile?.profile_id;
+    const profileChanged = syncedInitialProfile.current !== initialProfile;
+    submittedProfileId.current = null;
+    syncedInitialProfile.current = initialProfile;
+    if (profileChanged && !ownSave) {
+      saveRequest.current += 1;
+      setBusyAction(null);
+      setStatus("");
+    }
     setProfile(mergeProfile(initialProfile, leagueCalendar));
   }, [initialProfile, leagueCalendar]);
+  useEffect(() => {
+    if (!changePolicy.dirty) return undefined;
+    const warn = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [changePolicy.dirty]);
   useEffect(() => {
     if (initialProfile || !profile.profile_id) return undefined;
     const controller = new AbortController();
@@ -541,16 +571,21 @@ export function LeagueSettings({
       requestAnimationFrame(() => errorRef.current?.focus());
       return;
     }
+    const request = ++saveRequest.current;
+    submittedProfileId.current = profile.profile_id;
     setBusyAction(generate ? "generate" : "save");
     setStatus("");
     try {
       const callback = generate ? onGenerate : onSave;
       if (callback) {
-        await callback(profile);
+        const committed = await callback(profile);
+        if (request !== saveRequest.current || committed === false) return;
         setStatus(
           generate
             ? "Dati rigenerati per questo profilo."
-            : "Profilo salvato correttamente.",
+            : changePolicy.action === "rerun_simulation"
+              ? "Profilo salvato: riesegui la simulazione per aggiornare i risultati."
+              : "Profilo aggiornato.",
         );
         return;
       }
@@ -564,17 +599,21 @@ export function LeagueSettings({
       });
       if (!response.ok)
         throw new Error(`L'API locale ha restituito ${response.status}`);
+      if (request !== saveRequest.current) return;
       setStatus(
         generate
           ? "Generazione richiesta correttamente."
           : "Profilo salvato correttamente.",
       );
     } catch (error) {
-      setStatus(
-        `Impossibile ${generate ? "generare" : "salvare"}: ${error.message}.`,
-      );
+      if (request === saveRequest.current)
+        setStatus(
+          `Impossibile ${generate ? "generare" : "salvare"}: ${error.message}.`,
+        );
     } finally {
-      setBusyAction(null);
+      if (request === saveRequest.current) {
+        setBusyAction(null);
+      }
     }
   };
   const uploadSource = async (group, index, file) => {
@@ -1324,6 +1363,19 @@ export function LeagueSettings({
         </div>
       </fieldset>
       <footer className="ls-actions">
+        {changePolicy.dirty && (
+          <aside className="ls-change-warning" role="status">
+            <strong>Modifiche non applicate</strong>
+            <span>{changePolicy.fields.join(", ")}</span>
+            <small>
+              Azione consigliata: {changePolicy.action === "regenerate_dataset"
+                ? "salva e rigenera dati"
+                : changePolicy.action === "rerun_simulation"
+                  ? "salva e riesegui simulazione"
+                  : "salva modifiche"}.
+            </small>
+          </aside>
+        )}
         <p>
           {sourcesReady
             ? "Le fonti necessarie sono presenti. Il calendario della lega è facoltativo."
@@ -1331,18 +1383,18 @@ export function LeagueSettings({
         </p>
         <button
           type="submit"
-          className={`ls-save${busyAction === "save" ? " is-busy" : status === "Profilo salvato correttamente." ? " is-saved" : ""}`}
+          className={`ls-save${busyAction === "save" ? " is-busy" : profileSaved ? " is-saved" : ""}`}
           disabled={busy}
           aria-busy={busyAction === "save"}
         >
-          {(busyAction === "save" || status === "Profilo salvato correttamente.") && (
+          {(busyAction === "save" || profileSaved) && (
             <span className="ls-save-icon" aria-hidden="true">
               {busyAction === "save" ? "" : "✓"}
             </span>
           )}
           {busyAction === "save"
             ? "Salvataggio in corso..."
-            : status === "Profilo salvato correttamente."
+            : profileSaved
               ? "Profilo salvato"
               : "Salva profilo"}
         </button>
@@ -1352,7 +1404,7 @@ export function LeagueSettings({
           disabled={busy || !sourcesReady}
           onClick={() => save(true)}
         >
-          {busy ? "Elaborazione..." : "Salva e genera"}
+          {busyAction === "generate" ? "Elaborazione..." : "Salva e genera"}
         </button>
       </footer>
     </form>
